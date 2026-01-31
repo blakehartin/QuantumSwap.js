@@ -1,0 +1,25 @@
+{
+  "name": "QuantumSwap",
+  "version": "0.0.1",
+  "description": "QuantumSwap.js SDK for DEX functionality in QuantumCoin blockchain",
+  "author": "QuantumSwap Community",
+  "license": "MIT",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "scripts": {
+    "build": "node -e \"console.log('JS package: no build step required')\"",
+    "build-powershell": "node -e \"console.log('JS package: no build step required')\"",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "test:e2e": "node --test --test-concurrency=1 \"test/e2e/**/*.test.js\""
+  },
+  "dependencies": {
+    "quantum-coin-pqc-js-sdk": "^1.0.5",
+    "seed-words": "^1.0.2",
+    "quantum-coin-js-sdk": "^1.0.28",
+    "quantumcoin": "7.0.3"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0"
+  }
+}
