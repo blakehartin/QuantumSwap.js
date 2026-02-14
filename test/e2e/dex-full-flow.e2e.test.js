@@ -17,7 +17,6 @@ const { Initialize } = require("quantumcoin/config");
 const {
   JsonRpcProvider,
   Wallet,
-  Contract,
   ContractFactory,
   getCreateAddress,
   isAddress,
@@ -192,7 +191,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
       const resp = await wallet.sendTransaction({ ...tx, nonce, gasLimit });
       console.log("[4] ERC20 deploy tx id:", name, resp.hash);
       addReceiptGas(await resp.wait(1, 600_000));
-      const contract = new Contract(address, SIMPLE_ERC20_ABI, wallet);
+      const contract = IERC20.connect(getAddress(address), wallet);
       contract._deployTx = resp;
       return contract;
     };
@@ -540,6 +539,17 @@ describe("QuantumSwap V2 DEX full flow", () => {
     console.log("\n========== TOTAL GAS USED (cumulative) ==========");
     console.log(`  ${totalGasUsed.toString()} (from ${txHashes.length} transaction receipts)`);
     console.log("========================================\n");
+
+    // --- Test wallet token balances (after all steps) ---
+    const walletTokenABalanceRaw = await tokenA.balanceOf(walletAddr);
+    const walletTokenBBalanceRaw = await tokenB.balanceOf(walletAddr);
+    const walletTokenABalance = typeof walletTokenABalanceRaw === "bigint" ? walletTokenABalanceRaw : BigInt(String(walletTokenABalanceRaw));
+    const walletTokenBBalance = typeof walletTokenBBalanceRaw === "bigint" ? walletTokenBBalanceRaw : BigInt(String(walletTokenBBalanceRaw));
+    console.log("========== TEST WALLET TOKEN BALANCES ==========");
+    console.log(`  Wallet: ${walletAddr}`);
+    console.log(`  TokenA (BigCat) balance: ${walletTokenABalance.toString()} (${formatUnits(walletTokenABalance, 18)} formatted)`);
+    console.log(`  TokenB (SmallDog) balance: ${walletTokenBBalance.toString()} (${formatUnits(walletTokenBBalance, 18)} formatted)`);
+    console.log("================================================\n");
 
     // Summary assertions
     assert.ok(isAddress(routerAddress) && isAddress(factoryAddress) && isAddress(wqAddress), "all core addresses valid");
