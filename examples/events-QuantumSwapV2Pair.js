@@ -1,7 +1,6 @@
 const path = require("node:path");
-const parentQcPath = path.join(__dirname, "..", "node_modules", "quantumcoin");
-const { Initialize } = require(path.join(parentQcPath, "config"));
-const { JsonRpcProvider } = require(parentQcPath);
+const { Initialize } = require("quantumcoin/config");
+const { getProvider } = require("quantumcoin");
 const parentQswapPath = path.join(__dirname, "..");
 const { QuantumSwapV2Pair } = require(parentQswapPath);
 
@@ -13,7 +12,7 @@ async function main() {
   if (!address) throw new Error("CONTRACT_ADDRESS is required");
   await Initialize(null);
 
-  const provider = new JsonRpcProvider(rpcUrl, chainId);
+  const provider = getProvider(rpcUrl, chainId);
   const contract = QuantumSwapV2Pair.connect(address, provider);
 
   const logs = await contract.queryFilter("Transfer", "latest", "latest");
