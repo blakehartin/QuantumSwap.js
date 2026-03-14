@@ -15,9 +15,8 @@ const path = require("node:path");
 
 const { Initialize } = require("quantumcoin/config");
 const {
-  JsonRpcProvider,
+  getProvider,
   Wallet,
-  Contract,
   ContractFactory,
   getCreateAddress,
   isAddress,
@@ -60,10 +59,29 @@ const TEST_WALLET_PASSPHRASE = "QuantumCoinExample123!";
 const DEPLOY_GAS_FALLBACK = 6_000_000n;
 const TX_GAS_FALLBACK = 400_000n;
 const GAS_BUFFER_PERCENT = 110n; // 10% buffer over estimate
-const DEADLINE_OFFSET = 1200;
+// Use chain block timestamp (UTC) + offset for deadline so it matches what the router checks (no clock skew).
+// Router requires block.timestamp <= deadline.
+const DEADLINE_OFFSET = process.env.QC_DEADLINE_OFFSET ? Number(process.env.QC_DEADLINE_OFFSET) : 3600;
 
-function deadline() {
-  return BigInt(Math.floor(Date.now() / 1000) + DEADLINE_OFFSET);
+/** Returns deadline as UTC Unix timestamp: current chain block timestamp + DEADLINE_OFFSET. */
+async function deadline(provider) {
+  const blockNumber = await provider.getBlockNumber();
+  const block = await provider.getBlock(blockNumber);
+  const blockTimestamp = block && block.timestamp != null ? Number(block.timestamp) : Math.floor(Date.now() / 1000);
+  return BigInt(blockTimestamp + DEADLINE_OFFSET);
+}
+
+function reportDexFlow(contractAddresses, txHashes) {
+  console.log("\n========== DEX-FULL-FLOW E2E REPORT ==========");
+  console.log("Contract addresses:\n");
+  for (const [name, addr] of Object.entries(contractAddresses)) {
+    console.log(`  ${name}: ${addr}`);
+  }
+  console.log("\nTransaction IDs:\n");
+  (txHashes || []).forEach((hash, i) => {
+    console.log(`  [${i + 1}] ${hash}`);
+  });
+  console.log("================================================\n");
 }
 
 /** Estimate gas via provider.estimateGas (quantumcoin.js SDK), add buffer, fallback on error. */
@@ -95,6 +113,9 @@ async function deployGasLimit(provider, from, getDeployTx, fallback, bytecodeFlo
 
 describe("QuantumSwap V2 DEX full flow", () => {
   it("deploys WQ, Factory, Router; validates addresses; deploys two ERC20s; creates pair; parses PairCreated; balance checks; sends tokens to another wallet", async (t) => {
+    const contractAddresses = {};
+    const txHashes = [];
+    try {
     const rpcUrl = process.env.QC_RPC_URL;
     if (!rpcUrl) {
       t.skip("QC_RPC_URL not provided");
@@ -108,7 +129,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
     const chainId = process.env.QC_CHAIN_ID ? Number(process.env.QC_CHAIN_ID) : 123123;
     await Initialize(null);
 
-    const provider = new JsonRpcProvider(rpcUrl, chainId);
+    const provider = getProvider(rpcUrl, chainId);
     const wallet = Wallet.fromEncryptedJsonSync(TEST_WALLET_ENCRYPTED_JSON, TEST_WALLET_PASSPHRASE, provider);
 
     // --- Address validation (quantumcoin.js isAddress / getAddress) ---
@@ -119,8 +140,6 @@ describe("QuantumSwap V2 DEX full flow", () => {
     // Before-balance for step 11 (native): capture before any transactions
     const nativeBalanceBeforeAllTxs = await provider.getBalance(walletAddr);
 
-    const contractAddresses = {};
-    const txHashes = [];
     let totalGasUsed = 0n;
     let pairWqTokenAAddress = null;
 
@@ -192,7 +211,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
       const resp = await wallet.sendTransaction({ ...tx, nonce, gasLimit });
       console.log("[4] ERC20 deploy tx id:", name, resp.hash);
       addReceiptGas(await resp.wait(1, 600_000));
-      const contract = new Contract(address, SIMPLE_ERC20_ABI, wallet);
+      const contract = IERC20.connect(getAddress(address), wallet);
       contract._deployTx = resp;
       return contract;
     };
@@ -322,6 +341,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
       console.log("[8b] tokenB approve tx id:", approveB.hash);
       txHashes.push(approveB.hash);
       addReceiptGas(await approveB.wait(1, 600_000));
+      const addLiqDeadline = await deadline(provider);
       const addLiqTxReq = await routerContract.populateTransaction.addLiquidity(
         tokenAAddress,
         tokenBAddress,
@@ -330,7 +350,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
         amountAMin,
         amountBMin,
         walletAddr,
-        deadline(),
+        addLiqDeadline,
       );
       const addLiqGasLimit = await estimateGasLimit(provider, { from: walletAddr, ...addLiqTxReq }, TX_GAS_FALLBACK);
       const tokenABalanceBeforeAddLiqRaw = await tokenA.balanceOf(walletAddr);
@@ -343,7 +363,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
         amountAMin,
         amountBMin,
         walletAddr,
-        deadline(),
+        addLiqDeadline,
         { gasLimit: addLiqGasLimit },
       );
       console.log("[8c] addLiquidity tx id:", addLiqTx.hash);
@@ -370,12 +390,13 @@ describe("QuantumSwap V2 DEX full flow", () => {
       console.log("[9a] swap approve tx id:", approveSwap.hash);
       txHashes.push(approveSwap.hash);
       addReceiptGas(await approveSwap.wait(1, 600_000));
+      const swapDeadline = await deadline(provider);
       const swapTxReq = await routerContract.populateTransaction.swapExactTokensForTokens(
         swapAmountIn,
         amountOutMin,
         pathSwap,
         walletAddr,
-        deadline(),
+        swapDeadline,
       );
       const swapGasLimit = await estimateGasLimit(provider, { from: walletAddr, ...swapTxReq }, TX_GAS_FALLBACK);
       const tokenBBalanceBeforeSwapRaw = await tokenB.balanceOf(walletAddr);
@@ -385,7 +406,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
         amountOutMin,
         pathSwap,
         walletAddr,
-        deadline(),
+        swapDeadline,
         { gasLimit: swapGasLimit },
       );
       console.log("[9b] swapExactTokensForTokens tx id:", swapTx.hash);
@@ -438,13 +459,14 @@ describe("QuantumSwap V2 DEX full flow", () => {
       console.log("[10c] tokenA approve (ETH liq) tx id:", approveTokenAForEth.hash);
       txHashes.push(approveTokenAForEth.hash);
       addReceiptGas(await approveTokenAForEth.wait(1, 600_000));
+      const addLiqEthDeadline = await deadline(provider);
       const addLiqEthTxReq = await routerContract.populateTransaction.addLiquidityETH(
         tokenAAddress,
         tokenForEthLiq,
         0n,
         0n,
         walletAddr,
-        deadline(),
+        addLiqEthDeadline,
         { value: ethToWrap },
       );
       const addLiqEthGasLimit = await estimateGasLimit(provider, { from: walletAddr, ...addLiqEthTxReq }, TX_GAS_FALLBACK);
@@ -454,7 +476,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
         0n,
         0n,
         walletAddr,
-        deadline(),
+        addLiqEthDeadline,
         { value: ethToWrap, gasLimit: addLiqEthGasLimit },
       );
       console.log("[10d] addLiquidityETH tx id:", addLiqEthTx.hash);
@@ -463,11 +485,12 @@ describe("QuantumSwap V2 DEX full flow", () => {
 
       const ethSwapValue = parseUnits("0.1", 18);
       const pathEthToToken = [wqAddressNorm, tokenAAddress];
+      const swapEthDeadline = await deadline(provider);
       const swapEthTxReq = await routerContract.populateTransaction.swapExactETHForTokens(
         0n,
         pathEthToToken,
         walletAddr,
-        deadline(),
+        swapEthDeadline,
         { value: ethSwapValue },
       );
       const swapEthGasLimit = await estimateGasLimit(provider, { from: walletAddr, ...swapEthTxReq }, TX_GAS_FALLBACK);
@@ -477,7 +500,7 @@ describe("QuantumSwap V2 DEX full flow", () => {
         0n,
         pathEthToToken,
         walletAddr,
-        deadline(),
+        swapEthDeadline,
         { value: ethSwapValue, gasLimit: swapEthGasLimit },
       );
       console.log("[10e] swapExactETHForTokens tx id:", swapEthTx.hash);
@@ -529,21 +552,31 @@ describe("QuantumSwap V2 DEX full flow", () => {
     assert.ok(typeof wqBalanceWallet === "bigint", "WQ balance is bigint");
 
     // --- Summary: contract addresses and transaction hashes ---
-    console.log("\n========== CONTRACT ADDRESSES ==========");
-    for (const [name, addr] of Object.entries(contractAddresses)) {
-      console.log(`  ${name}: ${addr}`);
-    }
-    console.log("\n========== TRANSACTION HASHES ==========");
-    txHashes.forEach((hash, i) => {
-      console.log(`  [${i + 1}] ${hash}`);
-    });
-    console.log("\n========== TOTAL GAS USED (cumulative) ==========");
+    reportDexFlow(contractAddresses, txHashes);
+    console.log("========== TOTAL GAS USED (cumulative) ==========");
     console.log(`  ${totalGasUsed.toString()} (from ${txHashes.length} transaction receipts)`);
     console.log("========================================\n");
+
+    // --- Test wallet token balances (after all steps) ---
+    const walletTokenABalanceRaw = await tokenA.balanceOf(walletAddr);
+    const walletTokenBBalanceRaw = await tokenB.balanceOf(walletAddr);
+    const walletTokenABalance = typeof walletTokenABalanceRaw === "bigint" ? walletTokenABalanceRaw : BigInt(String(walletTokenABalanceRaw));
+    const walletTokenBBalance = typeof walletTokenBBalanceRaw === "bigint" ? walletTokenBBalanceRaw : BigInt(String(walletTokenBBalanceRaw));
+    console.log("========== TEST WALLET TOKEN BALANCES ==========");
+    console.log(`  Wallet: ${walletAddr}`);
+    console.log(`  TokenA (BigCat) balance: ${walletTokenABalance.toString()} (${formatUnits(walletTokenABalance, 18)} formatted)`);
+    console.log(`  TokenB (SmallDog) balance: ${walletTokenBBalance.toString()} (${formatUnits(walletTokenBBalance, 18)} formatted)`);
+    console.log("================================================\n");
 
     // Summary assertions
     assert.ok(isAddress(routerAddress) && isAddress(factoryAddress) && isAddress(wqAddress), "all core addresses valid");
     assert.ok(isAddress(tokenAAddress) && isAddress(tokenBAddress), "token addresses valid");
     assert.ok(!pairCreated || isAddress(pairAddressFromEvent), "pair address valid when pair created");
+    } catch (err) {
+      if (Object.keys(contractAddresses).length > 0 || txHashes.length > 0) {
+        reportDexFlow(contractAddresses, txHashes);
+      }
+      throw err;
+    }
   }, { timeout: 300_000 });
 });

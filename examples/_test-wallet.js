@@ -1,6 +1,4 @@
-const path = require("node:path");
-const parentQcPath = path.join(__dirname, "..", "node_modules", "quantumcoin");
-const { Wallet } = require(parentQcPath);
+const { Wallet } = require("quantumcoin");
 
 // Hardcoded test wallet (test-only; never use for real funds)
 const TEST_WALLET_ENCRYPTED_JSON =
