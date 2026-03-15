@@ -1,6 +1,6 @@
 {
   "name": "quantumswap",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "QuantumSwap.js SDK for DEX functionality in QuantumCoin blockchain",
   "author": "QuantumSwap Community",
   "license": "MIT",
@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "quantum-coin-js-sdk": "^1.0.31",
-    "quantumcoin": "^7.0.4",
+    "quantumcoin": "^7.0.5",
     "seed-words": "^1.0.2"
   },
   "devDependencies": {
